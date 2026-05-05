@@ -78,7 +78,17 @@ describe("SolxCompiler", () => {
     assert.equal(spawnCompileCalls.length, 1);
     assert.deepEqual(spawnCompileCalls[0].input.settings, {
       optimizer: { enabled: true },
-      outputSelection: { "*": { "*": ["abi"] } },
+      // The plugin auto-augments outputSelection so EDR can render Solidity
+      // stack traces from solx-compiled artifacts; see SolxCompiler.compile.
+      outputSelection: {
+        "*": {
+          "*": [
+            "abi",
+            "evm.bytecode.debugInfo",
+            "evm.deployedBytecode.debugInfo",
+          ],
+        },
+      },
       LLVMOptimization: "1",
     });
   });
