@@ -1,4 +1,3 @@
-import "hardhat/types/config";
 import "hardhat/types/solidity";
 
 declare module "hardhat/types/solidity" {
@@ -13,6 +12,8 @@ declare module "hardhat/types/solidity" {
     debugInfo?: string;
   }
 }
+
+import "hardhat/types/config";
 
 declare module "hardhat/types/config" {
   export interface SolidityCompilerTypeDefinitions {

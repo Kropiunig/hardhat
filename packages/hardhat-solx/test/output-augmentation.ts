@@ -1,4 +1,7 @@
-import type { CompilerOutputContract } from "hardhat/types/solidity";
+import type {
+  CompilationJob,
+  CompilerOutputContract,
+} from "hardhat/types/solidity";
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -82,7 +85,7 @@ describe(
 
       // The fixtures are independent (no shared imports) so they can land in
       // separate jobs; run each one and merge outputs by source path.
-      const seenJobs = new Set<unknown>();
+      const seenJobs = new Set<CompilationJob>();
       const mergedContracts: Record<
         string,
         Record<string, CompilerOutputContract>
