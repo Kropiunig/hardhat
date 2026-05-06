@@ -1,3 +1,5 @@
+import type { CompilerOutputContract } from "hardhat/types/solidity";
+
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -7,6 +9,12 @@ import {
   importUserConfig,
   resolveHardhatConfigPath,
 } from "hardhat/hre";
+
+// The plugin augments `CompilerOutputBytecode` with the optional
+// solx-only `debugInfo` field in `src/type-extensions.ts`; importing the
+// plugin entrypoint here makes that augmentation visible to this test
+// file's typed accesses.
+import "../src/index.js";
 
 describe("hardhat-solx integration", () => {
   useFixtureProject("simple");
@@ -106,19 +114,34 @@ describe(
       return await createHardhatRuntimeEnvironment(userConfig);
     }
 
+    // Each fixture contract exercises a different bytecode shape:
+    //   Counter            — runtime revert via an internal helper
+    //   ConstructorRevert  — CREATE-time revert (separate creation blob)
+    //   InlineAsm          — revert from a hand-written `assembly { ... }`
+    // The plugin must produce non-empty debugInfo on both `evm.bytecode`
+    // (creation) and `evm.deployedBytecode` (runtime) for all of them.
+    const FIXTURES: ReadonlyArray<{ source: string; contract: string }> = [
+      { source: "Counter.sol", contract: "Counter" },
+      { source: "ConstructorRevert.sol", contract: "ConstructorRevert" },
+      { source: "InlineAsm.sol", contract: "InlineAsm" },
+    ];
+
     it("solx-compiled artifacts carry evm.bytecode.debugInfo and evm.deployedBytecode.debugInfo", async () => {
       const hre = await createHre();
 
       const rootFilePaths = await hre.solidity.getRootFilePaths({
         scope: "contracts",
       });
-      const counterPath = rootFilePaths.find((p) => p.endsWith("Counter.sol"));
-      assert.ok(
-        counterPath !== undefined,
-        `Counter.sol should be a build root, got: ${rootFilePaths.join(", ")}`,
-      );
+      const fixturePaths = FIXTURES.map(({ source }) => {
+        const path = rootFilePaths.find((p) => p.endsWith(`/${source}`));
+        assert.ok(
+          path !== undefined,
+          `${source} should be a build root, got: ${rootFilePaths.join(", ")}`,
+        );
+        return path;
+      });
 
-      const jobsResult = await hre.solidity.getCompilationJobs([counterPath], {
+      const jobsResult = await hre.solidity.getCompilationJobs(fixturePaths, {
         force: true,
         quiet: true,
         buildProfile: "solx",
@@ -127,86 +150,98 @@ describe(
         jobsResult.success,
         "getCompilationJobs should succeed for the solx profile",
       );
-      const compilationJob = jobsResult.compilationJobsPerFile
-        .values()
-        .next().value;
-      assert.ok(compilationJob !== undefined, "expected a CompilationJob");
 
-      const { output } = await hre.solidity.runCompilationJob(compilationJob, {
-        quiet: true,
-        buildProfile: "solx",
-      });
+      // The fixtures are independent (no shared imports) so they can land in
+      // separate jobs; run each one and merge outputs by source path.
+      const seenJobs = new Set<unknown>();
+      const mergedContracts: Record<
+        string,
+        Record<string, CompilerOutputContract>
+      > = {};
+      const mergedErrors: Array<{ severity: string; message: string }> = [];
+      for (const job of jobsResult.compilationJobsPerFile.values()) {
+        if (seenJobs.has(job)) continue;
+        seenJobs.add(job);
+        const { output } = await hre.solidity.runCompilationJob(job, {
+          quiet: true,
+          buildProfile: "solx",
+        });
+        for (const e of output.errors ?? []) {
+          mergedErrors.push(e);
+        }
+        for (const [src, contracts] of Object.entries(output.contracts ?? {})) {
+          mergedContracts[src] = {
+            ...(mergedContracts[src] ?? {}),
+            ...contracts,
+          };
+        }
+      }
 
-      const errors = (output.errors ?? []).filter(
-        (e: { severity: string }) => e.severity === "error",
-      );
+      const errors = mergedErrors.filter((e) => e.severity === "error");
       assert.equal(
         errors.length,
         0,
-        `solx compilation produced errors: ${errors.map((e: { message: string }) => e.message).join(", ")}`,
+        `solx compilation produced errors: ${errors.map((e) => e.message).join(", ")}`,
       );
 
-      const counterContract = output.contracts?.["project/contracts/Counter.sol"]?.Counter;
-      assert.ok(
-        counterContract !== undefined,
-        `Counter contract not found in output. Sources: ${Object.keys(output.contracts ?? {}).join(", ")}`,
-      );
+      for (const { source, contract } of FIXTURES) {
+        const sourcePath = `project/contracts/${source}`;
+        const compiled = mergedContracts[sourcePath]?.[contract];
+        assert.ok(
+          compiled !== undefined,
+          `${contract} not found at ${sourcePath}. Sources: ${Object.keys(mergedContracts).join(", ")}`,
+        );
 
-      const evm = counterContract.evm;
-      assert.ok(evm !== undefined, "expected evm in output");
-      assert.ok(evm.bytecode !== undefined, "expected evm.bytecode");
-      assert.ok(
-        evm.deployedBytecode !== undefined,
-        "expected evm.deployedBytecode",
-      );
+        const evm = compiled.evm;
+        assert.ok(evm !== undefined, `${contract}: expected evm in output`);
 
-      // `debugInfo` is solx-specific and not part of the solc-defined
-      // `CompilerOutputBytecode` interface, so access it via index notation
-      // through a `Record` cast.
-      const bytecode = evm.bytecode as unknown as Record<string, unknown>;
-      const deployedBytecode = evm.deployedBytecode as unknown as Record<
-        string,
-        unknown
-      >;
-      const creationDebugInfo = bytecode.debugInfo;
-      const runtimeDebugInfo = deployedBytecode.debugInfo;
+        const { bytecode, deployedBytecode } = evm;
+        assert.ok(bytecode !== undefined, `${contract}: expected evm.bytecode`);
+        assert.ok(
+          deployedBytecode !== undefined,
+          `${contract}: expected evm.deployedBytecode`,
+        );
 
-      // The whole point: the plugin must add debugInfo to outputSelection so
-      // EDR can render solx-aware stack traces. solc artifacts wouldn't have
-      // this field at all; solx artifacts must.
-      assert.ok(
-        typeof creationDebugInfo === "string" && creationDebugInfo.length > 0,
-        "expected evm.bytecode.debugInfo to be a non-empty hex string",
-      );
-      assert.ok(
-        typeof runtimeDebugInfo === "string" && runtimeDebugInfo.length > 0,
-        "expected evm.deployedBytecode.debugInfo to be a non-empty hex string",
-      );
+        const { debugInfo: creationDebugInfo } = bytecode;
+        const { debugInfo: runtimeDebugInfo } = deployedBytecode;
 
-      // Sanity-check that the blobs are hex-encoded ELFs (the wire format
-      // EDR expects). The leading bytes are `\x7fELF` = 0x7f454c46.
-      assert.ok(
-        creationDebugInfo.toLowerCase().startsWith("7f454c46"),
-        "evm.bytecode.debugInfo should start with the ELF magic bytes (7f454c46)",
-      );
-      assert.ok(
-        runtimeDebugInfo.toLowerCase().startsWith("7f454c46"),
-        "evm.deployedBytecode.debugInfo should start with the ELF magic bytes (7f454c46)",
-      );
+        // Core assertion: the plugin must add debugInfo to outputSelection so
+        // EDR can render solx-aware stack traces. solc artifacts wouldn't
+        // carry this field at all; solx artifacts must.
+        assert.ok(
+          creationDebugInfo !== undefined && creationDebugInfo.length > 0,
+          `${contract}: expected evm.bytecode.debugInfo to be a non-empty hex string`,
+        );
+        assert.ok(
+          runtimeDebugInfo !== undefined && runtimeDebugInfo.length > 0,
+          `${contract}: expected evm.deployedBytecode.debugInfo to be a non-empty hex string`,
+        );
 
-      // Symmetry: solx 0.1.4 emits the legacy sourceMap as an empty string,
-      // because all source-mapping info now lives in DWARF. If this ever
-      // changes upstream, EDR's routing of solx artifacts may need to adapt.
-      assert.equal(
-        evm.bytecode.sourceMap,
-        "",
-        "expected evm.bytecode.sourceMap to be empty for solx artifacts",
-      );
-      assert.equal(
-        evm.deployedBytecode.sourceMap,
-        "",
-        "expected evm.deployedBytecode.sourceMap to be empty for solx artifacts",
-      );
+        // Sanity-check the blobs are hex-encoded ELFs (the wire format EDR
+        // expects). The leading bytes are `\x7fELF` = 0x7f454c46.
+        assert.ok(
+          creationDebugInfo.toLowerCase().startsWith("7f454c46"),
+          `${contract}: evm.bytecode.debugInfo should start with the ELF magic bytes (7f454c46)`,
+        );
+        assert.ok(
+          runtimeDebugInfo.toLowerCase().startsWith("7f454c46"),
+          `${contract}: evm.deployedBytecode.debugInfo should start with the ELF magic bytes (7f454c46)`,
+        );
+
+        // Symmetry: solx 0.1.4 leaves the legacy sourceMap empty because all
+        // source-mapping info now lives in DWARF. If this ever changes
+        // upstream, EDR's routing of solx artifacts may need to adapt.
+        assert.equal(
+          bytecode.sourceMap,
+          "",
+          `${contract}: expected evm.bytecode.sourceMap to be empty for solx artifacts`,
+        );
+        assert.equal(
+          deployedBytecode.sourceMap,
+          "",
+          `${contract}: expected evm.deployedBytecode.sourceMap to be empty for solx artifacts`,
+        );
+      }
     });
   },
 );
