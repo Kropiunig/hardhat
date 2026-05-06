@@ -4,6 +4,7 @@ import type {
   CompilerOutput,
 } from "hardhat/types/solidity";
 
+import { deepClone } from "@nomicfoundation/hardhat-utils/lang";
 import { spawnCompile as defaultSpawnCompile } from "hardhat/internal/solidity";
 
 /**
@@ -12,7 +13,7 @@ import { spawnCompile as defaultSpawnCompile } from "hardhat/internal/solidity";
  * EDR consumes that DWARF to render Solidity stack traces, so the plugin opts
  * into it on every compile by augmenting the user's outputSelection.
  */
-const SOLX_DEBUG_INFO_SELECTORS = [
+export const SOLX_DEBUG_INFO_SELECTORS = [
   "evm.bytecode.debugInfo",
   "evm.deployedBytecode.debugInfo",
 ] as const;
@@ -42,14 +43,21 @@ export class SolxCompiler implements Compiler {
   public async compile(input: CompilerInput): Promise<CompilerOutput> {
     const args = ["--standard-json", "--no-import-callback"];
 
-    // Merge default solx settings with user settings. User settings take
-    // precedence, allowing overrides of viaIR, LLVMOptimization, etc.
+    // TODO https://github.com/NomicFoundation/hardhat/issues/<filed-with-this-PR>:
+    // ideally this augmentation lives in a `preprocessSolcInputBeforeBuilding`
+    // hook so it lands in the cached `solcInput` (and therefore in the recorded
+    // build-info), participates in the build-ID hash, and is visible to other
+    // plugin handlers. Today the hook is invoked without `solcConfig`, so it
+    // can't gate on `type === "solx"` — fixing it requires a Hardhat 3 core
+    // change to thread `solcConfig` through. Until then we mutate at compile
+    // time, which means the build-info on disk lies about the actual
+    // outputSelection that was sent to solx.
     const modifiedInput: CompilerInput = {
       ...input,
       settings: {
         ...this.#extraSettings,
         ...input.settings,
-        outputSelection: addSolxDebugInfoSelectors(
+        outputSelection: await addSolxDebugInfoSelectors(
           input.settings?.outputSelection,
         ),
       },
@@ -60,38 +68,26 @@ export class SolxCompiler implements Compiler {
 }
 
 /**
- * Returns a new outputSelection where every contract entry includes the solx
- * debugInfo selectors. Existing user selectors are preserved; we never remove
- * anything, only add what's missing.
+ * Returns a new outputSelection containing the solx debugInfo selectors at
+ * the wildcard `["*"]["*"]` slot. Existing user selectors are preserved
+ * verbatim; downstream `#dedupeAndSortOutputSelection` in hardhat's solidity
+ * build system removes any resulting duplicates.
  */
-function addSolxDebugInfoSelectors(
-  outputSelection: NonNullable<CompilerInput["settings"]>["outputSelection"],
-): NonNullable<CompilerInput["settings"]>["outputSelection"] {
-  // Deep-clone so we don't mutate the caller's object.
-  const cloned: Record<string, Record<string, string[]>> = JSON.parse(
-    JSON.stringify(outputSelection ?? {}),
+export async function addSolxDebugInfoSelectors(
+  outputSelection:
+    | NonNullable<CompilerInput["settings"]>["outputSelection"]
+    | undefined,
+): Promise<NonNullable<CompilerInput["settings"]>["outputSelection"]> {
+  const cloned: Record<string, Record<string, string[]>> = await deepClone(
+    outputSelection ?? {},
   );
 
-  // Hardhat's defaults populate `cloned['*']['*']`. If the caller passed an
-  // empty selection, ensure the wildcard slot exists so our selectors take effect.
+  // Hardhat normalizes outputSelection to populate `["*"]["*"]` upstream, but
+  // unit tests construct the input directly with `{}`, so make sure the slot
+  // exists before we push.
   cloned["*"] ??= {};
   cloned["*"]["*"] ??= [];
-
-  for (const sourceMap of Object.values(cloned)) {
-    for (const contractKey of Object.keys(sourceMap)) {
-      if (contractKey === "") {
-        // The empty-string contract key is for file-level outputs (e.g. `ast`);
-        // none of those carry per-contract debugInfo. Leave it alone.
-        continue;
-      }
-      const selectors = sourceMap[contractKey];
-      for (const sel of SOLX_DEBUG_INFO_SELECTORS) {
-        if (!selectors.includes(sel)) {
-          selectors.push(sel);
-        }
-      }
-    }
-  }
+  cloned["*"]["*"].push(...SOLX_DEBUG_INFO_SELECTORS);
 
   return cloned;
 }
