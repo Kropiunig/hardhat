@@ -13,7 +13,7 @@ import { spawnCompile as defaultSpawnCompile } from "hardhat/internal/solidity";
  * EDR consumes that DWARF to render Solidity stack traces, so the plugin opts
  * into it on every compile by augmenting the user's outputSelection.
  */
-export const SOLX_DEBUG_INFO_SELECTORS = [
+export const SOLX_DEBUG_INFO_SELECTORS: readonly string[] = [
   "evm.bytecode.debugInfo",
   "evm.deployedBytecode.debugInfo",
 ] as const;

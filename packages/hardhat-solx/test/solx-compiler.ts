@@ -6,6 +6,7 @@ import { beforeEach, describe, it } from "node:test";
 import {
   SOLX_DEBUG_INFO_SELECTORS,
   SolxCompiler,
+  addSolxDebugInfoSelectors,
 } from "../src/internal/solx-compiler.js";
 
 // Track calls to the fake spawnCompile
@@ -132,5 +133,47 @@ describe("SolxCompiler", () => {
 
     const result = await compiler.compile(input);
     assert.equal(result, fakeOutput);
+  });
+});
+
+describe("addSolxDebugInfoSelectors", () => {
+  it("populates the wildcard slot when the input is empty", async () => {
+    const result = await addSolxDebugInfoSelectors({});
+    assert.deepEqual(result, {
+      "*": { "*": [...SOLX_DEBUG_INFO_SELECTORS] },
+    });
+  });
+
+  it("appends to an existing wildcard selector list without removing user entries", async () => {
+    const result = await addSolxDebugInfoSelectors({
+      "*": { "*": ["abi", "metadata"] },
+    });
+    assert.deepEqual(result, {
+      "*": { "*": ["abi", "metadata", ...SOLX_DEBUG_INFO_SELECTORS] },
+    });
+  });
+
+  it('preserves the file-level `[*][""]` slot for outputs like ast', async () => {
+    const result = await addSolxDebugInfoSelectors({
+      "*": { "": ["ast"] },
+    });
+    // The file-level slot must round-trip unchanged. Selectors are added at
+    // the per-contract slot `["*"]["*"]` instead.
+    assert.ok(result !== undefined, "result should not be undefined");
+    assert.deepEqual(result["*"][""], ["ast"]);
+  });
+
+  it("does not mutate the input object", async () => {
+    const input = { "*": { "*": ["abi"] } };
+    const before = JSON.stringify(input);
+    await addSolxDebugInfoSelectors(input);
+    assert.equal(JSON.stringify(input), before);
+  });
+
+  it("accepts undefined input (sets up the wildcard slot)", async () => {
+    const result = await addSolxDebugInfoSelectors(undefined);
+    assert.deepEqual(result, {
+      "*": { "*": [...SOLX_DEBUG_INFO_SELECTORS] },
+    });
   });
 });
