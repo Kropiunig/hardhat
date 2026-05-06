@@ -3,7 +3,10 @@ import type { CompilerInput, CompilerOutput } from "hardhat/types/solidity";
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 
-import { SolxCompiler } from "../src/internal/solx-compiler.js";
+import {
+  SOLX_DEBUG_INFO_SELECTORS,
+  SolxCompiler,
+} from "../src/internal/solx-compiler.js";
 
 // Track calls to the fake spawnCompile
 let spawnCompileCalls: Array<{
@@ -76,17 +79,15 @@ describe("SolxCompiler", () => {
     await compiler.compile(input);
 
     assert.equal(spawnCompileCalls.length, 1);
+    // The plugin auto-augments outputSelection so EDR can render Solidity
+    // stack traces from solx-compiled artifacts; see SolxCompiler.compile.
+    // Reference the production constant rather than hardcoding the names so
+    // the test stays in sync if a third selector is ever added.
     assert.deepEqual(spawnCompileCalls[0].input.settings, {
       optimizer: { enabled: true },
-      // The plugin auto-augments outputSelection so EDR can render Solidity
-      // stack traces from solx-compiled artifacts; see SolxCompiler.compile.
       outputSelection: {
         "*": {
-          "*": [
-            "abi",
-            "evm.bytecode.debugInfo",
-            "evm.deployedBytecode.debugInfo",
-          ],
+          "*": ["abi", ...SOLX_DEBUG_INFO_SELECTORS],
         },
       },
       LLVMOptimization: "1",
