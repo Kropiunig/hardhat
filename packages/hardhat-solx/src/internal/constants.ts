@@ -22,9 +22,11 @@ export const DEFAULT_SOLX_SETTINGS: Record<string, unknown> = {
 
 /**
  * Maps Solidity compiler versions to the solx version that embeds them.
- * Only stable solx releases are included.
+ * Only stable solx releases that emit DWARF debug info are included —
+ * earlier solx versions (≤ 0.1.3) leave both `sourceMap` and the new
+ * `debugInfo` selectors empty, so EDR cannot render stack traces for
+ * artifacts produced by them.
  */
 export const SOLIDITY_TO_SOLX_VERSION_MAP: Record<string, string> = {
-  "0.8.33": "0.1.3",
   "0.8.34": "0.1.4",
 };

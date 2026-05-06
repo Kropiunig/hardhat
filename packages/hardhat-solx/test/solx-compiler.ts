@@ -28,17 +28,17 @@ describe("SolxCompiler", () => {
   });
 
   it("implements the Compiler interface", async () => {
-    const compiler = new SolxCompiler("0.1.3", "/path/to/solx");
+    const compiler = new SolxCompiler("0.1.4", "/path/to/solx");
 
-    assert.equal(compiler.version, "0.1.3");
-    assert.equal(compiler.longVersion, "0.1.3+solx");
+    assert.equal(compiler.version, "0.1.4");
+    assert.equal(compiler.longVersion, "0.1.4+solx");
     assert.equal(compiler.compilerPath, "/path/to/solx");
     assert.equal(compiler.isSolcJs, false);
   });
 
   it("calls spawnCompile with correct binary path and args", async () => {
     const compiler = new SolxCompiler(
-      "0.1.3",
+      "0.1.4",
       "/path/to/solx",
       {},
       fakeSpawnCompile,
@@ -59,7 +59,7 @@ describe("SolxCompiler", () => {
 
   it("merges extraSettings into input.settings", async () => {
     const compiler = new SolxCompiler(
-      "0.1.3",
+      "0.1.4",
       "/path/to/solx",
       { LLVMOptimization: "1" },
       fakeSpawnCompile,
@@ -95,7 +95,7 @@ describe("SolxCompiler", () => {
 
   it("does not modify the original input object", async () => {
     const compiler = new SolxCompiler(
-      "0.1.3",
+      "0.1.4",
       "/path/to/solx",
       { LLVMOptimization: "1" },
       fakeSpawnCompile,
@@ -118,7 +118,7 @@ describe("SolxCompiler", () => {
 
   it("returns the output from spawnCompile", async () => {
     const compiler = new SolxCompiler(
-      "0.1.3",
+      "0.1.4",
       "/path/to/solx",
       {},
       fakeSpawnCompile,
