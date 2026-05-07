@@ -80,17 +80,13 @@ describe("SolxCompiler", () => {
     await compiler.compile(input);
 
     assert.equal(spawnCompileCalls.length, 1);
-    // The plugin auto-augments outputSelection so EDR can render Solidity
-    // stack traces from solx-compiled artifacts; see SolxCompiler.compile.
-    // Reference the production constant rather than hardcoding the names so
-    // the test stays in sync if a third selector is ever added.
+    // The outputSelection passes through unchanged: the plugin's
+    // `resolveUserConfig` hook is what adds the solx-specific debugInfo
+    // selectors, so by the time `SolxCompiler.compile` runs they're
+    // already present on whatever the build system constructed.
     assert.deepEqual(spawnCompileCalls[0].input.settings, {
       optimizer: { enabled: true },
-      outputSelection: {
-        "*": {
-          "*": ["abi", ...SOLX_DEBUG_INFO_SELECTORS],
-        },
-      },
+      outputSelection: { "*": { "*": ["abi"] } },
       LLVMOptimization: "1",
     });
   });

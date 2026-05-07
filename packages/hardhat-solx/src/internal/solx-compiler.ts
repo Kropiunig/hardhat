@@ -43,23 +43,18 @@ export class SolxCompiler implements Compiler {
   public async compile(input: CompilerInput): Promise<CompilerOutput> {
     const args = ["--standard-json", "--no-import-callback"];
 
-    // TODO https://github.com/NomicFoundation/hardhat/issues/<filed-with-this-PR>:
-    // ideally this augmentation lives in a `preprocessSolcInputBeforeBuilding`
-    // hook so it lands in the cached `solcInput` (and therefore in the recorded
-    // build-info), participates in the build-ID hash, and is visible to other
-    // plugin handlers. Today the hook is invoked without `solcConfig`, so it
-    // can't gate on `type === "solx"` — fixing it requires a Hardhat 3 core
-    // change to thread `solcConfig` through. Until then we mutate at compile
-    // time, which means the build-info on disk lies about the actual
-    // outputSelection that was sent to solx.
+    // The solx-specific outputSelection selectors are baked into the
+    // resolved compiler config by the plugin's `resolveUserConfig` hook
+    // (see `hook-handlers/config.ts`), so by the time hardhat constructs
+    // the solc input here, `input.settings.outputSelection` already
+    // includes them — no compile-time mutation needed. We only merge the
+    // extra solx-specific compiler settings (LLVMOptimization, viaIR,
+    // etc.) on top of the user-supplied ones.
     const modifiedInput: CompilerInput = {
       ...input,
       settings: {
         ...this.#extraSettings,
         ...input.settings,
-        outputSelection: await addSolxDebugInfoSelectors(
-          input.settings?.outputSelection,
-        ),
       },
     };
 
@@ -72,14 +67,25 @@ export class SolxCompiler implements Compiler {
  * the wildcard `["*"]["*"]` slot. Existing user selectors are preserved
  * verbatim; downstream `#dedupeAndSortOutputSelection` in hardhat's solidity
  * build system removes any resulting duplicates.
+ *
+ * Input is typed `unknown` (rather than the strictly-typed
+ * `CompilerInput["settings"]["outputSelection"]`) because the call site in
+ * `resolveUserConfig` reads from `solcConfig.settings`, which upstream
+ * Hardhat types as `any`; widening here avoids `as`-style casts at the
+ * caller (forbidden by the repo's eslint config).
  */
 export async function addSolxDebugInfoSelectors(
-  outputSelection:
-    | NonNullable<CompilerInput["settings"]>["outputSelection"]
-    | undefined,
+  outputSelection: unknown,
 ): Promise<NonNullable<CompilerInput["settings"]>["outputSelection"]> {
+  const seed: Record<
+    string,
+    Record<string, string[]>
+  > = typeof outputSelection === "object" && outputSelection !== null
+    ? // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- known shape
+      (outputSelection as Record<string, Record<string, string[]>>)
+    : {};
   const cloned: Record<string, Record<string, string[]>> = await deepClone(
-    outputSelection ?? {},
+    seed,
   );
 
   // Hardhat normalizes outputSelection to populate `["*"]["*"]` upstream, but
